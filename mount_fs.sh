@@ -1,6 +1,6 @@
 cd $(pwd)
 mkdir fs 
 cd fs
- cpio -idv <../rootfs.cpio #마운트
+ cpio -idv <../rootfs_updated.cpio #마운트
  cd ../
 

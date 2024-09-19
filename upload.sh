@@ -2,7 +2,7 @@
 cd $(pwd)
 if [ -e "ex.c" ]; then
 	musl-gcc ./ex.c -o ./ex -static
-	mv ./ex ./fs/
+	cp ./ex ./fs/
 fi
 cd ./fs
 find . -print0 | cpio -o --format=newc --null  > ../rootfs_updated.cpio
