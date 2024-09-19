@@ -1,3 +1,4 @@
+.gdbinit
 bzImage
 vmlinux
 rootfs_updated.cpio
