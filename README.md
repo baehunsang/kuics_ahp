@@ -1,6 +1,8 @@
 # Kuics_ahp
 ---
-This is week1
+This is week2
 
 Our goal
--setting kernel debugging env in WSL or lima vm
+-build vuln device driver and put it inside kernel
+
+Make sure to copy `./init` file inside to `fs/init` 
