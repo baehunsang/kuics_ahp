@@ -10,4 +10,4 @@ qemu-system-x86_64 \
     -monitor /dev/null \
     -initrd ./rootfs.cpio \
     -net nic,model=virtio \
-    -net user 
+    -net user  
