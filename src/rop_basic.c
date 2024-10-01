@@ -59,17 +59,29 @@ static ssize_t module_write(struct file *file, const char __user *buf,
 	//check
 	uint64_t* ret = (uint64_t*)(&kbuf[0x408]);
     if(((ret[0] >= 0xffffffff81c00df0) && (ret[0] <  0xffffffff82450000))||
+        (ret[0]&0x7f0000000000)||
         ((ret[1] >= 0xffffffff81c00df0) && (ret[1] < 0xffffffff82450000))||
+        (ret[1]&0x7f0000000000)||
         ((ret[2] >= 0xffffffff81c00df0) && (ret[2] < 0xffffffff82450000))||
+        (ret[2]&0x7f0000000000)||
         ((ret[3] >= 0xffffffff81c00df0) && (ret[3] < 0xffffffff82450000))||
+        (ret[3]&0x7f0000000000)||
         ((ret[4] >= 0xffffffff81c00df0) && (ret[4] < 0xffffffff82450000))||
+        (ret[4]&0x7f0000000000)||
         ((ret[5] >= 0xffffffff81c00df0) && (ret[5] < 0xffffffff82450000))||
+        (ret[5]&0x7f0000000000)||
         ((ret[6] >= 0xffffffff81c00df0) && (ret[6] < 0xffffffff82450000))||
+        (ret[6]&0x7f0000000000)||
         ((ret[7] >= 0xffffffff81c00df0) && (ret[7] < 0xffffffff82450000))||
+        (ret[7]&0x7f0000000000)||
         ((ret[8] >= 0xffffffff81c00df0) && (ret[8] < 0xffffffff82450000))||
+        (ret[8]&0x7f0000000000)||
         ((ret[9] >= 0xffffffff81c00df0) && (ret[9] < 0xffffffff82450000))||
+        (ret[9]&0x7f0000000000)||
         ((ret[10] >= 0xffffffff81c00df0) && (ret[10] < 0xffffffff82450000))||
-        ((ret[11] >= 0xffffffff81c00df0) && (ret[11] < 0xffffffff82450000))
+        (ret[10]&0x7f0000000000)||
+        ((ret[11] >= 0xffffffff81c00df0) && (ret[11] < 0xffffffff82450000))||
+        (ret[11]&0x7f0000000000)
     ){
 			panic("No rop!");
 		}
