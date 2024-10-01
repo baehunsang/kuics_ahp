@@ -5,17 +5,19 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("ptr-yudai");
-MODULE_DESCRIPTION("Holstein v1 - Vulnerable Kernel Driver for Pawnyable");
 
-#define DEVICE_NAME "holstein"
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("kaerr57");
+MODULE_DESCRIPTION("Hspace kernel");
+
+#define DEVICE_NAME "basic_rop"
 #define BUFFER_SIZE 0x400
 
 char *g_buf = NULL;
 
 static int module_open(struct inode *inode, struct file *file) {
     printk(KERN_INFO "module_open called\n");
+	
 
     g_buf = kmalloc(BUFFER_SIZE, GFP_KERNEL);
     if (!g_buf) {
@@ -44,15 +46,34 @@ static ssize_t module_read(struct file *file, char __user *buf, size_t count,
 static ssize_t module_write(struct file *file, const char __user *buf,
                             size_t count, loff_t *f_pos) {
     char kbuf[BUFFER_SIZE] = { 0 };
-
     printk(KERN_INFO "module_write called\n");
-
+	if(count > 0x470){
+		printk(KERN_INFO "Too long!\n");
+		return -EINVAL;
+	}
     if (_copy_from_user(kbuf, buf, count)) {
         printk(KERN_INFO "copy_from_user failed\n");
         return -EINVAL;
     }
     memcpy(g_buf, kbuf, BUFFER_SIZE);
-
+	//check
+    if((*(uint64_t*)(kbuf + 0x400 + 0) >= 0xffffffff81c00df0)||
+        (*(uint64_t*)(kbuf + 0x400 + 1) >= 0xffffffff81c00df0)||
+        (*(uint64_t*)(kbuf + 0x400 + 2) >= 0xffffffff81c00df0)||
+        (*(uint64_t*)(kbuf + 0x400 + 3) >= 0xffffffff81c00df0)||
+        (*(uint64_t*)(kbuf + 0x400 + 4) >= 0xffffffff81c00df0)||
+        (*(uint64_t*)(kbuf + 0x400 + 5) >= 0xffffffff81c00df0)||
+        (*(uint64_t*)(kbuf + 0x400 + 6) >= 0xffffffff81c00df0)||
+        (*(uint64_t*)(kbuf + 0x400 + 7) >= 0xffffffff81c00df0)||
+        (*(uint64_t*)(kbuf + 0x400 + 8) >= 0xffffffff81c00df0)||
+        (*(uint64_t*)(kbuf + 0x400 + 9) >= 0xffffffff81c00df0)||
+        (*(uint64_t*)(kbuf + 0x400 + 10) >= 0xffffffff81c00df0)||
+        (*(uint64_t*)(kbuf + 0x400 + 11) >= 0xffffffff81c00df0)
+    ){
+			printk(KERN_INFO "No ROP!");
+			return -EINVAL;
+		}
+		
     return count;
 }
 
