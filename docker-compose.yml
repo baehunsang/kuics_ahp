@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  week3:
+    image: week3
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "40021:40021"
+    command: ["socat", "TCP-LISTEN:40021,fork", "EXEC:/main.sh"]
+

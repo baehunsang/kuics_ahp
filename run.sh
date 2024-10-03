@@ -8,7 +8,6 @@ qemu-system-x86_64 \
     -cpu qemu64 \
     -smp 1 \
     -monitor /dev/null \
-    -initrd ./rootfs_updated.cpio \
+    -initrd ./rootfs.cpio \
     -net nic,model=virtio \
     -net user \
-    -s -S
