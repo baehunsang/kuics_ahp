@@ -1,8 +1,10 @@
 # Kuics_ahp
 ---
-This is week2
+This is week3
 
 Our goal
--build vuln device driver and put it inside kernel
+-Find flag in `/root/flag` 
 
-Make sure to copy `./init` file inside to `fs/init` 
+-Flag formate is KUICS{xxx}
+
+
