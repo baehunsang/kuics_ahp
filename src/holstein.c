@@ -7,7 +7,7 @@
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("ptr-yudai");
-MODULE_DESCRIPTION("Holstein v2 - Vulnerable Kernel Driver for Pawnyable");
+MODULE_DESCRIPTION("Holstein v3 - Vulnerable Kernel Driver for Pawnyable");
 
 #define DEVICE_NAME "holstein"
 #define BUFFER_SIZE 0x400
@@ -17,7 +17,7 @@ char *g_buf = NULL;
 static int module_open(struct inode *inode, struct file *file) {
     printk(KERN_INFO "module_open called\n");
 
-    g_buf = kmalloc(BUFFER_SIZE, GFP_KERNEL);
+    g_buf = kzalloc(BUFFER_SIZE, GFP_KERNEL);
     if (!g_buf) {
         printk(KERN_INFO "kmalloc failed");
         return -ENOMEM;
@@ -30,6 +30,11 @@ static ssize_t module_read(struct file *file, char __user *buf, size_t count,
                            loff_t *f_pos) {
     printk(KERN_INFO "module_read called\n");
 
+    if (count > BUFFER_SIZE) {
+        printk(KERN_INFO "invalid buffer size\n");
+        return -EINVAL;
+    }
+
     if (copy_to_user(buf, g_buf, count)) {
         printk(KERN_INFO "copy_to_user failed\n");
         return -EINVAL;
@@ -41,6 +46,11 @@ static ssize_t module_read(struct file *file, char __user *buf, size_t count,
 static ssize_t module_write(struct file *file, const char __user *buf,
                             size_t count, loff_t *f_pos) {
     printk(KERN_INFO "module_write called\n");
+
+    if (count > BUFFER_SIZE) {
+        printk(KERN_INFO "invalid buffer size\n");
+        return -EINVAL;
+    }
 
     if (copy_from_user(g_buf, buf, count)) {
         printk(KERN_INFO "copy_from_user failed\n");

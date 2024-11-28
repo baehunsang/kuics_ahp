@@ -1,10 +1,14 @@
 # Kuics_ahp
 ---
-This is week3
+This is week6
 
 Our goal
 -Find flag in `/root/flag` 
 
 -Flag formate is KUICS{xxx}
+
+-When finding gadget, please use `./extract-vmlinux ./bzImage > ./vmlinux_remote`
+and `ropr ./vmlinux_remote --noisy -R <regex>`
+
 
 
