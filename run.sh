@@ -6,7 +6,7 @@ qemu-system-x86_64 \
     -append "console=ttyS0 loglevel=3 oops=panic panic=-1 pti=on nokaslr" \
     -no-reboot \
     -cpu qemu64,+smep,+smap \
-    -smp 1 \
+    -smp 2\
     -monitor /dev/null \
     -initrd ./rootfs_updated.cpio \
     -net nic,model=virtio \

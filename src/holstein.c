@@ -7,15 +7,22 @@
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("ptr-yudai");
-MODULE_DESCRIPTION("Holstein v3 - Vulnerable Kernel Driver for Pawnyable");
+MODULE_DESCRIPTION("Holstein v4 - Vulnerable Kernel Driver for Pawnyable");
 
 #define DEVICE_NAME "holstein"
 #define BUFFER_SIZE 0x400
 
+int mutex = 0;
 char *g_buf = NULL;
 
 static int module_open(struct inode *inode, struct file *file) {
     printk(KERN_INFO "module_open called\n");
+
+    if (mutex) {
+        printk(KERN_INFO "resource is busy");
+        return -EBUSY;
+    }
+    mutex = 1;
 
     g_buf = kzalloc(BUFFER_SIZE, GFP_KERNEL);
     if (!g_buf) {
@@ -63,6 +70,7 @@ static ssize_t module_write(struct file *file, const char __user *buf,
 static int module_close(struct inode *inode, struct file *file) {
     printk(KERN_INFO "module_close called\n");
     kfree(g_buf);
+    mutex = 0;
     return 0;
 }
 

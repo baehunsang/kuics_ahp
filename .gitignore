@@ -4,3 +4,6 @@ vmlinux
 ex
 rootfs_updated.cpio
 fs/**
+dummy
+m
+shell
