@@ -1,6 +1,6 @@
 # Kuics_ahp
 ---
-This is week6
+This is week7
 
 Our goal
 -Find flag in `/root/flag` 
