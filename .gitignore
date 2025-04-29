@@ -1,5 +1,7 @@
 .gdbinit
 bzImage
+vmlinux_debug
+vmlinux
 ex
 rootfs_updated.cpio
 fs/**
