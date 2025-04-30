@@ -1,14 +1,14 @@
 # Kuics_ahp
 ---
-This is week6
+This is weekEX
 
 Our goal
--Find flag in `/root/flag` 
+- BPF code writing and Understanding verifier activity
+- Please change -kernel option in qemu to `./bzImage_debug` when you debugging.
+- Use this vmlinux_debug for debugging >>> https://drive.google.com/file/d/1w8nmM9U-45O_Jhwtqk0m7ICLyoBmWkIe/view?usp=sharing
+- Please change -kernel option in qemu to `./bzImage` when you run EXPLOIT CODE
 
--Flag formate is KUICS{xxx}
 
--When finding gadget, please use `./extract-vmlinux ./bzImage > ./vmlinux_remote`
-and `ropr ./vmlinux_remote --noisy -R <regex>`
 
 
 
