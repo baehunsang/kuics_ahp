@@ -1,8 +1,9 @@
 .gdbinit
-bzImage
 vmlinux_debug
 vmlinux
 ex
+poc
+shell
 rootfs_updated.cpio
 fs/**
 dummy
