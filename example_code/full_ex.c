@@ -9,8 +9,8 @@
 #include <unistd.h>
 #include "bpf_insn.h"
 
-#define ofs_array_map_ops 0xc124a0
-#define ofs_modprobe_path 0xe37fe0
+#define ofs_array_map_ops  0x121cd20
+#define ofs_modprobe_path 0x18510e0
 
 void fatal(const char *msg) {
   perror(msg);

